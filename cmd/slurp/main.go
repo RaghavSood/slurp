@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
 	"path"
@@ -13,8 +15,11 @@ import (
 
 var outDir string
 
+var upstreams arrayFlags
+
 func main() {
 	flag.StringVar(&outDir, "output-dir", "/var/lib/slurp", "directory to output the dumps to")
+	flag.Var(&upstreams, "upstream", "Specify multiple times for multiple upstreams")
 
 	flag.Parse()
 
@@ -53,5 +58,29 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Println(curl)
 	writeFile(outDir, cleanPath, reqId, "curl", curl.String())
 
+	var b bytes.Buffer
+	b.ReadFrom(r.Body)
+	r.Body = ioutil.NopCloser(bytes.NewReader(b.Bytes()))
+	for _, upstream := range upstreams {
+		err = ProxyRequest(r, upstream)
+		r.Body = ioutil.NopCloser(bytes.NewReader(b.Bytes()))
+		if err != nil {
+			fmt.Printf("ERROR: can't proxy to %s\n", err.Error())
+		}
+	}
+
 	w.Write([]byte("OK"))
+}
+
+func ProxyRequest(req *http.Request, destination string) error {
+	fmt.Printf("proxying %s to %s\n", req.Header.Get("X-Request-ID"), destination)
+
+	req.Host = destination
+	req.URL.Host = destination
+	req.URL.Scheme = "https"
+	req.RequestURI = ""
+
+	_, err := http.DefaultClient.Do(req)
+
+	return err
 }
